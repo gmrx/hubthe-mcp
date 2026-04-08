@@ -1,0 +1,8 @@
+services:
+  hubthe-mcp:
+    build: .
+    ports:
+      - "${PORT:-8080}:8080"
+    env_file:
+      - .env
+    restart: unless-stopped
