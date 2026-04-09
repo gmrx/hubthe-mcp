@@ -12,6 +12,18 @@ MCP-сервер для работы с платформой [HubThe](https://hu
 | `hubthe_list_projects` | Список доступных проектов |
 | `hubthe_set_project` | Выбор активного проекта по GUID |
 | `hubthe_list_my_tasks` | Задачи, назначенные на текущего пользователя |
+| `hubthe_list_sprints` | Список спринтов в активном проекте |
+| `hubthe_list_sprint_tasks` | Задачи выбранного спринта |
+| `hubthe_list_custom_fields` | Доступные кастомные поля проекта |
+| `hubthe_search_tasks` | Фильтрация задач по кастомным полям |
+| `hubthe_get_task_comments` | Комментарии задачи |
+| `hubthe_add_comment` | Добавление комментария или ответа |
+| `hubthe_add_diagram` | Добавление диаграммы Mermaid как Excalidraw-комментария |
+| `hubthe_create_task` | Создание задачи или подзадачи |
+| `hubthe_update_task` | Обновление полей задачи |
+| `hubthe_list_project_participants` | Участники проекта |
+| `hubthe_list_field_options` | Опции select-поля |
+| `hubthe_fetch_image` | Загрузка изображения из комментариев HubThe |
 
 ## Быстрый старт
 
@@ -108,8 +120,10 @@ npm run build
 
 | Режим | Запуск | Применение |
 |---|---|---|
-| **SSE** (по умолчанию) | `node dist/index.js --sse` | Docker, постоянный сервис |
+| **SSE / HTTP** (по умолчанию) | `node dist/index.js --http` | Docker, постоянный сервис |
 | **stdio** | `node dist/index.js` | Локально, клиент запускает процесс |
+
+`--sse` также поддерживается как алиас к `--http` для обратной совместимости.
 
 ## Переменные окружения
 
@@ -151,6 +165,68 @@ npm run build
 
 Поля в ответе: номер, название, описание, статус, приоритет, спринт, исполнители.
 
+### hubthe_list_sprints
+
+Возвращает список спринтов активного проекта с количеством задач в каждом.
+
+### hubthe_list_sprint_tasks
+
+Возвращает задачи выбранного спринта.
+
+| Параметр | Тип | По умолчанию | Описание |
+|---|---|---|---|
+| `sprint_name` | `string` | — | Название спринта |
+| `top_level_only` | `boolean` | `false` | Только задачи верхнего уровня |
+| `additional_fields` | `string[]` | — | Дополнительные slug полей |
+
+### hubthe_list_custom_fields
+
+Возвращает список доступных кастомных полей активного проекта: slug, имя, тип, системность.
+
+### hubthe_search_tasks
+
+Фильтрует задачи по кастомным полям активного проекта.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `filters` | `Array<{field, values, mode}>` | Фильтры по slug поля |
+| `fields` | `string[]` | Дополнительные поля в ответе |
+| `top_level_only` | `boolean` | Только задачи верхнего уровня |
+
+### hubthe_get_task_comments
+
+Возвращает задачу и её комментарии по номеру задачи или GUID.
+
+### hubthe_add_comment
+
+Добавляет комментарий или ответ на комментарий.
+
+### hubthe_add_diagram
+
+Конвертирует Mermaid в Excalidraw через `@excalidraw/mermaid-to-excalidraw` и добавляет диаграмму в комментарий задачи.
+Сериализация комментария совместима с `ExcalidrawNode` из `hubthe-front` (`Lexical JSON -> paragraph -> excalidraw`).
+Поддерживает опциональный `caption`, который добавляется отдельным абзацем после диаграммы.
+
+### hubthe_create_task
+
+Создаёт задачу в активном проекте. Поддерживает резолв человекочитаемых значений для select/users/sprint полей.
+
+### hubthe_update_task
+
+Обновляет указанные поля существующей задачи.
+
+### hubthe_list_project_participants
+
+Возвращает участников активного проекта: guid, имя, email.
+
+### hubthe_list_field_options
+
+Возвращает доступные значения для select-поля по его slug.
+
+### hubthe_fetch_image
+
+Загружает изображение из HubThe по URL и возвращает его как base64-контент для MCP-клиента.
+
 ## Архитектура
 
 ```
@@ -158,6 +234,7 @@ hubthemcp/
 ├── src/
 │   ├── index.ts            # MCP-сервер (stdio + SSE)
 │   └── hubthe-client.ts    # HTTP-клиент HubThe API
+│   └── mermaid-to-excalidraw.ts # Конвертация Mermaid -> Excalidraw
 ├── Dockerfile              # Multi-stage сборка
 ├── docker-compose.yml      # Запуск одной командой
 ├── .env.example            # Шаблон переменных
@@ -191,7 +268,7 @@ npm install
 npm run dev        # TypeScript watch
 npm run build      # Сборка
 npm start          # stdio-режим
-node dist/index.js --sse   # SSE-режим
+node dist/index.js --http  # SSE-режим
 ```
 
 ## Безопасность
