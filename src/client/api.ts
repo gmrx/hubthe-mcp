@@ -257,7 +257,16 @@ export class HubTheClient {
     filters: QueryFilter[],
     options?: { fields?: string[]; topLevelOnly?: boolean },
   ): Promise<FormattedTask[]> {
-    return this.queryTasks(filters, {
+    if (this.cachedFieldsFull.length === 0) {
+      await this.loadFieldMap();
+    }
+    if (this.cachedParticipants.length === 0) {
+      await this.loadParticipants();
+    }
+
+    const resolvedFilters = filters.map((f) => this.resolveSearchFilter(f));
+
+    return this.queryTasks(resolvedFilters, {
       additionalFields: options?.fields,
       topLevelOnly: options?.topLevelOnly,
     });
@@ -752,6 +761,39 @@ export class HubTheClient {
     }
 
     return result;
+  }
+
+  private resolveSearchFilter(filter: QueryFilter): QueryFilter {
+    const fieldDef = this.findFieldDef(filter.custom_field_slug);
+    const fieldType = fieldDef?.type_fields;
+
+    if (fieldType === "users") {
+      const resolvedValues = filter.values.flatMap((v) =>
+        this.resolveUserValue(v),
+      );
+      return { ...filter, type: "identifier", values: resolvedValues };
+    }
+
+    if (fieldType === "select" && fieldDef) {
+      const resolvedValues = filter.values.map((v) =>
+        this.resolveSelectValue(fieldDef, v),
+      );
+      return { ...filter, values: resolvedValues };
+    }
+
+    if (fieldType === "rotation") {
+      const resolvedValues = filter.values.map((v) =>
+        this.resolveSprintValue(v),
+      );
+      const allGuids = resolvedValues.every((v) => /^[0-9a-f]{8}-/.test(v));
+      return {
+        ...filter,
+        ...(allGuids ? { type: "identifier" } : {}),
+        values: resolvedValues,
+      };
+    }
+
+    return filter;
   }
 
   private resolveSprintValue(userValue: string): string {

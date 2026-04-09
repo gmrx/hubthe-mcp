@@ -271,7 +271,12 @@ server.tool(
   `Search and filter tasks in the active project by any custom fields.
 Use hubthe_list_custom_fields first to discover available field slugs.
 Filters support modes: "include" (match any of values) and "exclude" (exclude all of values).
-Example filters: [{"field": "статус", "values": ["В работе"]}, {"field": "приоритет", "values": ["Максимальный", "Высокий"]}]`,
+Values are resolved automatically:
+- select fields (статус, приоритет): pass human-readable value like "В работе", "Высокий"
+- users fields (исполнители, автор): pass user name or email like "Анастасия" or "alim@mail.ru" (resolved to GUID automatically)
+- sprint field (спринт): pass sprint name like "Спринт 51"
+Do NOT pass raw GUIDs for user/select/sprint fields — use human-readable values instead.
+Example filters: [{"field": "статус", "values": ["В работе"]}, {"field": "исполнители", "values": ["Анастасия"]}]`,
   {
     filters: z
       .array(
