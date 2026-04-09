@@ -23,6 +23,25 @@ function jsonResult(data: unknown) {
   };
 }
 
+async function requireProject() {
+  if (client.currentProject) return null;
+
+  const projects = await client.listProjects();
+  const active = projects.filter((p) => !p.archive && !p.hidden);
+
+  return jsonResult({
+    status: "no_project_selected",
+    message:
+      "No active project selected. Please ask the user which project to use, then call hubthe_set_project with the chosen GUID.",
+    available_projects: active.map((p) => ({
+      guid: p.guid,
+      name: `${p.name} (${p.guid})`,
+      slug: p.slug,
+      description: p.description,
+    })),
+  });
+}
+
 // ── hubthe_add_comment ──────────────────────────────────────────
 
 server.tool(
@@ -63,6 +82,8 @@ Example mermaid: "graph TD; A[Start] --> B{Decision}; B -->|Yes| C[OK]; B -->|No
       }
 
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
 
       let diagram = undefined;
       if (mermaidSyntax) {
@@ -100,13 +121,22 @@ Example mermaid: "graph TD; A[Start] --> B{Decision}; B -->|Yes| C[OK]; B -->|No
 server.tool(
   "hubthe_create_task",
   `Create a new task in the active project.
+IMPORTANT workflow:
+1. Before creating a task, always confirm with the user which project to use.
+   If no project is selected, a list of available projects will be returned — ask the user to choose.
+   Even if the project seems obvious from context, get explicit confirmation before proceeding.
+2. Always assign the task to the latest (highest-numbered) sprint unless the user specifies otherwise.
+   Call hubthe_list_sprints to find the latest sprint and include it in the fields automatically.
+   If unclear which sprint to use, ask the user.
+3. If the user doesn't specify a deadline (срок-до), no need to ask — but always set the sprint.
 Values are resolved automatically:
 - select fields (статус, приоритет): pass human-readable value like "В работе", "Высокий"
 - users fields (исполнители): pass user name or email like "Alim" or "alim@mail.ru" (comma-separated for multiple)
 - sprint field (спринт): pass sprint name like "Спринт 51"
+- datetime fields (срок-до, дата-начала): ALWAYS use format "YYYY-MM-DDT12:00:00.000000+03:00", e.g. "2026-04-13T12:00:00.000000+03:00"
 - text fields (название, описание): pass plain text
 Use hubthe_list_custom_fields, hubthe_list_project_participants, hubthe_list_sprints to discover available values.
-Example: {"название": "Fix login bug", "статус": "В работе", "исполнители": "Alim", "спринт": "Спринт 51"}`,
+Example: {"название": "Fix login bug", "статус": "В работе", "исполнители": "Alim", "спринт": "Спринт 51", "срок-до": "2026-04-13T12:00:00.000000+03:00"}`,
   {
     fields: z
       .record(z.string(), z.string())
@@ -123,6 +153,8 @@ Example: {"название": "Fix login bug", "статус": "В работе"
   async ({ fields, parent_task }) => {
     try {
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
 
       if (!fields["название"]) {
         return {
@@ -145,7 +177,7 @@ Example: {"название": "Fix login bug", "статус": "В работе"
 
       return jsonResult({
         status: "created",
-        project: client.currentProject,
+        project: client.currentProjectLabel,
         result,
       });
     } catch (error) {
@@ -159,11 +191,13 @@ Example: {"название": "Fix login bug", "статус": "В работе"
 server.tool(
   "hubthe_update_task",
   `Update fields of an existing task. Only the specified fields will be updated.
+If no project is selected, returns available projects — ask the user to choose first.
 Values are resolved automatically (same as hubthe_create_task):
 - select fields: pass readable values like "Готово", "Средний"
 - users fields: pass names like "Alim"
 - sprint: pass name like "Спринт 51"
-Example: hubthe_update_task({task: "HT1233", fields: {"статус": "Готово"}})`,
+- datetime fields (срок-до, дата-начала): ALWAYS use format "YYYY-MM-DDT12:00:00.000000+03:00", e.g. "2026-04-13T12:00:00.000000+03:00"
+Example: hubthe_update_task({task: "HT1233", fields: {"статус": "Готово", "срок-до": "2026-04-13T12:00:00.000000+03:00"}})`,
   {
     task: z
       .string()
@@ -175,6 +209,8 @@ Example: hubthe_update_task({task: "HT1233", fields: {"статус": "Гото�
   async ({ task: taskIdentifier, fields }) => {
     try {
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
 
       if (Object.keys(fields).length === 0) {
         return {

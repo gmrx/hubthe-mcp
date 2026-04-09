@@ -29,6 +29,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist/ ./dist/
 
 ENV HUBTHE_URL=https://hubthe.team
+ENV HUBTHE_PROJECT=
 ENV PORT=8080
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 

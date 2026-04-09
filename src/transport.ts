@@ -1,7 +1,6 @@
 import { randomUUID } from "crypto";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { server, client } from "./server.js";
 
@@ -15,98 +14,43 @@ async function startHTTP() {
 
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
-  function collectBody(req: IncomingMessage): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk: Buffer) => chunks.push(chunk));
-      req.on("end", () => {
-        try {
-          const raw = Buffer.concat(chunks).toString("utf-8");
-          resolve(raw ? JSON.parse(raw) : undefined);
-        } catch (err) {
-          reject(err);
-        }
-      });
-      req.on("error", reject);
-    });
-  }
-
-  async function handleMcpPost(req: IncomingMessage, res: ServerResponse) {
+  async function handleMcp(req: IncomingMessage, res: ServerResponse) {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    const body = await collectBody(req);
 
     if (sessionId && transports.has(sessionId)) {
-      const transport = transports.get(sessionId)!;
-      await transport.handleRequest(req, res, body);
+      await transports.get(sessionId)!.handleRequest(req, res);
       return;
     }
 
-    if (!sessionId && isInitializeRequest(body)) {
-      for (const [sid, old] of transports) {
-        try {
-          await old.close();
-        } catch {}
-        transports.delete(sid);
-      }
-      try {
-        await server.close();
-      } catch {}
-
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid) => {
-          transports.set(sid, transport);
-        },
-      });
-
-      transport.onclose = () => {
-        const sid = transport.sessionId;
-        if (sid) transports.delete(sid);
-      };
-
-      await server.connect(transport);
-      await transport.handleRequest(req, res, body);
-      return;
-    }
-
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
+    if (req.method === "GET" || req.method === "DELETE") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
         jsonrpc: "2.0",
-        error: {
-          code: -32000,
-          message: "Bad Request: No valid session ID provided",
-        },
+        error: { code: -32000, message: "Invalid or missing session ID" },
         id: null,
-      }),
-    );
-  }
-
-  async function handleMcpGet(req: IncomingMessage, res: ServerResponse) {
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (!sessionId || !transports.has(sessionId)) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({ error: "Invalid or missing session ID" }),
-      );
+      }));
       return;
     }
-    await transports.get(sessionId)!.handleRequest(req, res);
-  }
 
-  async function handleMcpDelete(
-    req: IncomingMessage,
-    res: ServerResponse,
-  ) {
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (!sessionId || !transports.has(sessionId)) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({ error: "Invalid or missing session ID" }),
-      );
-      return;
+    for (const [sid, old] of transports) {
+      try { await old.close(); } catch {}
+      transports.delete(sid);
     }
-    const transport = transports.get(sessionId)!;
+    try { await server.close(); } catch {}
+
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (sid) => {
+        transports.set(sid, transport);
+      },
+    });
+
+    transport.onclose = () => {
+      const sid = transport.sessionId;
+      if (sid) transports.delete(sid);
+    };
+
+    await server.connect(transport);
     await transport.handleRequest(req, res);
   }
 
@@ -120,10 +64,7 @@ async function startHTTP() {
       "Access-Control-Allow-Headers",
       "Content-Type, mcp-session-id, Last-Event-ID",
     );
-    res.setHeader(
-      "Access-Control-Expose-Headers",
-      "mcp-session-id",
-    );
+    res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -135,20 +76,11 @@ async function startHTTP() {
 
     try {
       if (path === "/mcp" || path === "/sse") {
-        if (req.method === "POST") {
-          await handleMcpPost(req, res);
-        } else if (req.method === "GET") {
-          await handleMcpGet(req, res);
-        } else if (req.method === "DELETE") {
-          await handleMcpDelete(req, res);
-        } else {
-          res.writeHead(405, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Method not allowed" }));
-        }
+        await handleMcp(req, res);
         return;
       }
 
-      if (req.url === "/health") {
+      if (path === "/health" || path === "/readyz") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
@@ -159,11 +91,12 @@ async function startHTTP() {
         return;
       }
 
-      if (req.url === "/") {
+      if (path === "/") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
             name: "hubthe-mcp",
+            version: "1.0.0",
             transport: "streamable-http",
             mcp: "/mcp",
           }),
@@ -192,8 +125,9 @@ async function startHTTP() {
     console.error(
       `HubThe MCP server listening on http://0.0.0.0:${port}`,
     );
-    console.error(`  MCP endpoint:  /mcp (Streamable HTTP)`);
-    console.error(`  Health check:  /health`);
+    console.error(`  MCP endpoint:  POST/GET/DELETE /mcp`);
+    console.error(`  Health probe:  GET /health`);
+    console.error(`  Status:        GET /`);
   });
 }
 

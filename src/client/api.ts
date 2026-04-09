@@ -37,6 +37,7 @@ export class HubTheClient {
   private _token: string | null = null;
   private userGuid: string | null = null;
   private currentProjectGuid: string | null = null;
+  private currentProjectName: string | null = null;
   private fieldMap: Map<string, string> = new Map();
   private cachedFields: FieldDef[] = [];
   private cachedFieldsFull: FieldDefFull[] = [];
@@ -56,6 +57,13 @@ export class HubTheClient {
 
   get currentProject(): string | null {
     return this.currentProjectGuid;
+  }
+
+  get currentProjectLabel(): string | null {
+    if (!this.currentProjectGuid) return null;
+    return this.currentProjectName
+      ? `${this.currentProjectName} (${this.currentProjectGuid})`
+      : this.currentProjectGuid;
   }
 
   private get apiV1(): string {
@@ -150,8 +158,9 @@ export class HubTheClient {
     return this.request<Project[]>(`${this.apiV1}/project`);
   }
 
-  setProject(projectGuid: string): void {
+  setProject(projectGuid: string, projectName?: string): void {
     this.currentProjectGuid = projectGuid;
+    this.currentProjectName = projectName ?? null;
     this.resetProjectCaches();
   }
 
@@ -790,12 +799,31 @@ export class HubTheClient {
         resolvedValue = this.resolveUserValue(value);
       } else if (fieldType === "rotation") {
         resolvedValue = this.resolveSprintValue(value);
+      } else if (fieldType === "datetime") {
+        resolvedValue = this.normalizeDatetime(value);
       }
 
       result.push({ guid_field: fieldGuid, value: resolvedValue });
     }
 
     return result;
+  }
+
+  private normalizeDatetime(value: string): string {
+    if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return value;
+
+    const dateOnly = /^(\d{4}-\d{2}-\d{2})$/.exec(value);
+    if (dateOnly) {
+      return `${dateOnly[1]}T12:00:00.000000+03:00`;
+    }
+
+    const parsed = new Date(value);
+    if (isNaN(parsed.getTime())) return value;
+
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, "0");
+    const d = String(parsed.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}T12:00:00.000000+03:00`;
   }
 
   private ensureAuth(): void {

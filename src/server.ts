@@ -4,6 +4,8 @@ import { getCredentials } from "./client/auth.js";
 
 export const client = new HubTheClient(process.env.HUBTHE_URL);
 
+export const lockedProjectGuid = process.env.HUBTHE_PROJECT?.trim() || null;
+
 let authPromise: Promise<void> | null = null;
 
 export function autoAuth(): Promise<void> {
@@ -24,7 +26,16 @@ export function autoAuth(): Promise<void> {
 
   const pendingAuth = client
     .auth(creds.email, creds.password)
-    .then(() => {});
+    .then(async () => {
+      if (lockedProjectGuid && !client.currentProject) {
+        try {
+          const proj = await client.getProjectDetails(lockedProjectGuid);
+          client.setProject(lockedProjectGuid, proj.name);
+        } catch {
+          client.setProject(lockedProjectGuid);
+        }
+      }
+    });
   authPromise = pendingAuth.finally(() => {
     authPromise = null;
   });

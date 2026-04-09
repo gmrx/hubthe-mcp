@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { server, client, autoAuth } from "../server.js";
+import { server, client, autoAuth, lockedProjectGuid } from "../server.js";
 
 function errorResult(error: unknown) {
   return {
@@ -19,6 +19,25 @@ function jsonResult(data: unknown) {
       { type: "text" as const, text: JSON.stringify(data, null, 2) },
     ],
   };
+}
+
+async function requireProject() {
+  if (client.currentProject) return null;
+
+  const projects = await client.listProjects();
+  const active = projects.filter((p) => !p.archive && !p.hidden);
+
+  return jsonResult({
+    status: "no_project_selected",
+    message:
+      "No active project selected. Please ask the user which project to use, then call hubthe_set_project with the chosen GUID.",
+    available_projects: active.map((p) => ({
+      guid: p.guid,
+      name: `${p.name} (${p.guid})`,
+      slug: p.slug,
+      description: p.description,
+    })),
+  });
 }
 
 // ── hubthe_whoami ───────────────────────────────────────────────
@@ -41,7 +60,7 @@ server.tool(
 
 server.tool(
   "hubthe_list_projects",
-  "List all projects accessible to the authenticated user.",
+  "List all projects accessible to the authenticated user. Each project shows its name with GUID in parentheses.",
   {},
   async () => {
     try {
@@ -49,14 +68,18 @@ server.tool(
       const projects = await client.listProjects();
       const summary = projects.map((p) => ({
         guid: p.guid,
-        name: p.name,
+        name: `${p.name} (${p.guid})`,
         slug: p.slug,
         description: p.description,
         creator: p.creator,
         hidden: p.hidden,
         archive: p.archive,
       }));
-      return jsonResult(summary);
+      return jsonResult({
+        current_project: client.currentProjectLabel,
+        count: summary.length,
+        projects: summary,
+      });
     } catch (error) {
       return errorResult(error);
     }
@@ -67,18 +90,32 @@ server.tool(
 
 server.tool(
   "hubthe_set_project",
-  "Set the active project by GUID. Required before listing tasks.",
+  "Set the active project by GUID. Required before any task operations." +
+    (lockedProjectGuid
+      ? ` Project is locked to ${lockedProjectGuid} via HUBTHE_PROJECT.`
+      : " If the user hasn't specified a project, call hubthe_list_projects first and ask the user to choose."),
   {
     project_guid: z.string().uuid().describe("Project GUID"),
   },
   async ({ project_guid }) => {
     try {
       await autoAuth();
+
+      if (lockedProjectGuid && project_guid !== lockedProjectGuid) {
+        return jsonResult({
+          status: "project_locked",
+          locked_project: lockedProjectGuid,
+          message:
+            "Project is locked via HUBTHE_PROJECT environment variable. Cannot switch.",
+        });
+      }
+
       const project = await client.getProjectDetails(project_guid);
-      client.setProject(project_guid);
+      client.setProject(project_guid, project.name);
       return jsonResult({
         status: "project_set",
-        project: {
+        project: `${project.name} (${project.guid})`,
+        details: {
           guid: project.guid,
           name: project.name,
           slug: project.slug,
@@ -95,7 +132,7 @@ server.tool(
 
 server.tool(
   "hubthe_list_my_tasks",
-  "List tasks assigned to the current user in the active project. Requires a selected project.",
+  "List tasks assigned to the current user in the active project. If no project is selected, returns a list of available projects — ask the user to choose one.",
   {
     top_level_only: z
       .boolean()
@@ -112,12 +149,15 @@ server.tool(
   async ({ top_level_only, additional_fields }) => {
     try {
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
+
       const tasks = await client.listMyTasks({
         topLevelOnly: top_level_only,
         additionalFields: additional_fields,
       });
       return jsonResult({
-        project: client.currentProject,
+        project: client.currentProjectLabel,
         count: tasks.length,
         tasks,
       });
@@ -131,14 +171,17 @@ server.tool(
 
 server.tool(
   "hubthe_list_sprints",
-  "List all sprints in the active project with task counts. Requires a selected project.",
+  "List all sprints in the active project with task counts. If no project is selected, returns available projects.",
   {},
   async () => {
     try {
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
+
       const sprints = await client.listSprints();
       return jsonResult({
-        project: client.currentProject,
+        project: client.currentProjectLabel,
         count: sprints.length,
         sprints,
       });
@@ -152,7 +195,7 @@ server.tool(
 
 server.tool(
   "hubthe_list_sprint_tasks",
-  "List all tasks in a specific sprint by name. Requires a selected project.",
+  "List all tasks in a specific sprint by name. If no project is selected, returns available projects.",
   {
     sprint_name: z
       .string()
@@ -172,12 +215,15 @@ server.tool(
   async ({ sprint_name, top_level_only, additional_fields }) => {
     try {
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
+
       const tasks = await client.listSprintTasks(sprint_name, {
         topLevelOnly: top_level_only,
         additionalFields: additional_fields,
       });
       return jsonResult({
-        project: client.currentProject,
+        project: client.currentProjectLabel,
         sprint: sprint_name,
         count: tasks.length,
         tasks,
@@ -192,11 +238,14 @@ server.tool(
 
 server.tool(
   "hubthe_list_custom_fields",
-  "List all custom fields available in the active project. Use this to discover field slugs for searching/filtering tasks. Requires a selected project.",
+  "List all custom fields available in the active project. Use this to discover field slugs for searching/filtering tasks. If no project is selected, returns available projects.",
   {},
   async () => {
     try {
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
+
       const fields = await client.listCustomFields();
       const summary = fields.map((f) => ({
         slug: f.slug,
@@ -205,7 +254,7 @@ server.tool(
         system: f.system ?? false,
       }));
       return jsonResult({
-        project: client.currentProject,
+        project: client.currentProjectLabel,
         count: summary.length,
         fields: summary,
       });
@@ -256,6 +305,8 @@ Example filters: [{"field": "статус", "values": ["В работе"]}, {"fi
   async ({ filters, fields, top_level_only }) => {
     try {
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
 
       const query = filters.map((f) => ({
         custom_field_slug: f.field,
@@ -269,7 +320,7 @@ Example filters: [{"field": "статус", "values": ["В работе"]}, {"fi
       });
 
       return jsonResult({
-        project: client.currentProject,
+        project: client.currentProjectLabel,
         filters: filters.map(
           (f) => `${f.field} ${f.mode} [${f.values.join(", ")}]`,
         ),
@@ -295,6 +346,9 @@ server.tool(
   async ({ task: taskIdentifier }) => {
     try {
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
+
       const { task, comments } = await client.getTaskComments(taskIdentifier);
 
       const allImages = comments.flatMap((c, i) =>
@@ -302,7 +356,7 @@ server.tool(
       );
 
       return jsonResult({
-        project: client.currentProject,
+        project: client.currentProjectLabel,
         task: {
           guid: task.guid,
           number: task.number,
@@ -332,6 +386,9 @@ server.tool(
   async () => {
     try {
       await autoAuth();
+      const noProject = await requireProject();
+      if (noProject) return noProject;
+
       const participants = await client.listProjectParticipants();
       const summary = participants.map((p) => ({
         guid: p.guid,
@@ -339,7 +396,7 @@ server.tool(
         email: p.email,
       }));
       return jsonResult({
-        project: client.currentProject,
+        project: client.currentProjectLabel,
         count: summary.length,
         participants: summary,
       });
